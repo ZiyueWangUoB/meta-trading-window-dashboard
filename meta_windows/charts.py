@@ -510,6 +510,172 @@ def day_profile_chart(
     return _base_layout(fig, height=380, hovermode="closest", showlegend=False)
 
 
+def vesting_lag_chart(lag: pd.DataFrame) -> go.Figure:
+    """Average return vs the vest-day close, by trading days after vest."""
+    data = lag.loc[lag["lag"] <= 10].copy()
+    x = data["lag"].to_numpy()
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=data["ci_high"] * 100,
+            mode="lines",
+            line=dict(width=0),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=data["ci_low"] * 100,
+            mode="lines",
+            fill="tonexty",
+            fillcolor="rgba(42, 120, 214, 0.12)",
+            line=dict(width=0),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=data["mean"] * 100,
+            mode="lines+markers",
+            name="Average return",
+            line=dict(color=BLUE, width=2.5),
+            marker=dict(
+                color=BLUE,
+                size=8,
+                line=dict(color=SURFACE, width=2),
+            ),
+            customdata=np.column_stack(
+                [
+                    data["n"],
+                    data["win_rate"] * 100,
+                    data["ci_low"] * 100,
+                    data["ci_high"] * 100,
+                ]
+            ),
+            hovertemplate=(
+                "Day %{x} after vest<br>"
+                "Average %{y:+.2f}%<br>"
+                "95% CI %{customdata[2]:+.1f}% to %{customdata[3]:+.1f}%<br>"
+                "Higher than vest day %{customdata[1]:.0f}%<br>"
+                "Windows %{customdata[0]}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_hline(y=0, line_color=AXIS, line_width=1)
+
+    trough = data.loc[data["mean"].idxmin()]
+    last = data.iloc[-1]
+    for row, shift in ((trough, -18), (last, 16)):
+        fig.add_annotation(
+            x=row["lag"],
+            y=row["mean"] * 100,
+            text=f"{row['mean'] * 100:+.1f}%",
+            showarrow=False,
+            yshift=shift,
+            font=dict(color=INK, size=11),
+        )
+
+    fig.update_xaxes(title_text="Trading days after vest (0 = sell on vest day)", dtick=1)
+    fig.update_yaxes(title_text="Average return vs vest-day close", ticksuffix="%")
+    return _base_layout(fig, height=420, hovermode="closest", showlegend=False)
+
+
+def vesting_calendar_chart(calendar: pd.DataFrame) -> go.Figure:
+    """Average return vs vest-day close for each calendar day after vest."""
+    data = calendar.loc[np.isfinite(calendar["mean"])].copy()
+    colors = np.where(data["mean"] >= 0, BLUE, RED)
+
+    fig = go.Figure(
+        go.Bar(
+            x=data["dom"],
+            y=data["mean"] * 100,
+            marker=dict(color=colors, line=dict(color=SURFACE, width=1)),
+            customdata=np.column_stack(
+                [data["n"], data["win_rate"] * 100, data["mean_percentile"]]
+            ),
+            hovertemplate=(
+                "Day %{x} of the month<br>"
+                "Average vs vest %{y:+.2f}%<br>"
+                "Higher than vest day %{customdata[1]:.0f}%<br>"
+                "Average price percentile in window %{customdata[2]:.0f}<br>"
+                "Windows %{customdata[0]}<extra></extra>"
+            ),
+        )
+    )
+    fig.add_vline(x=15, line_color=AXIS, line_width=1)
+    fig.add_annotation(
+        x=15,
+        y=1.03,
+        yref="paper",
+        text="vest date",
+        showarrow=False,
+        font=dict(color=MUTED, size=10),
+    )
+    fig.add_hline(y=0, line_color=AXIS, line_width=1)
+
+    best = data.loc[data["mean"].idxmax()]
+    fig.add_annotation(
+        x=best["dom"],
+        y=best["mean"] * 100,
+        text=f"Day {int(best['dom'])}: {best['mean'] * 100:+.1f}%",
+        showarrow=False,
+        yshift=16,
+        font=dict(color=INK, size=11),
+    )
+
+    fig.update_xaxes(title_text="Calendar day of the window month", dtick=1)
+    fig.update_yaxes(title_text="Average return vs vest-day close", ticksuffix="%")
+    return _base_layout(fig, height=400, hovermode="closest", showlegend=False)
+
+
+def vesting_peak_chart(peaks: pd.DataFrame) -> go.Figure:
+    """Count of windows whose post-vest high occurred on each calendar day."""
+    data = peaks.copy()
+    fig = go.Figure(
+        go.Bar(
+            x=data["dom"],
+            y=data["count"],
+            marker=dict(color=BLUE, line=dict(color=SURFACE, width=1)),
+            customdata=data["share"] * 100,
+            hovertemplate=(
+                "Day %{x}<br>"
+                "%{y} windows<br>"
+                "%{customdata:.0f}% of windows<extra></extra>"
+            ),
+        )
+    )
+    fig.add_vline(x=15, line_color=AXIS, line_width=1)
+    fig.add_annotation(
+        x=15,
+        y=1.03,
+        yref="paper",
+        text="vest date",
+        showarrow=False,
+        font=dict(color=MUTED, size=10),
+    )
+
+    top = data.nlargest(2, "count")
+    for row in top.itertuples(index=False):
+        fig.add_annotation(
+            x=row.dom,
+            y=row.count,
+            text=f"{row.count}",
+            showarrow=False,
+            yshift=14,
+            font=dict(color=INK, size=11),
+        )
+
+    fig.update_xaxes(title_text="Calendar day of the window month", dtick=1)
+    fig.update_yaxes(title_text="Windows peaking on this date", rangemode="tozero")
+    return _base_layout(fig, height=400, hovermode="closest", showlegend=False)
+
+
 def volume_ratio_chart(stats: pd.DataFrame) -> go.Figure:
     """Window average volume relative to the prior 60 trading days."""
     data = stats.sort_values("open_date")

@@ -36,6 +36,7 @@ November 2026.
 | **Window scoreboard** | Every window's return, drawdown, volatility, range and volume; year × month heatmap; sortable detail table |
 | **Open vs blackout** | Open-window-only equity curve vs buy & hold, regime statistics, daily return distributions |
 | **Inside the window** | All 58 normalised price paths, median path, latest window, average return by day-in-window, volume vs the prior 60 days |
+| **Vesting & sale timing** | If RSUs vest on the 15th, which later sale date has historically been best? Calendar-day profile, sale-rule scoreboard and peak-timing distribution |
 | **Methodology** | Policy definition, data sources, metric formulas and caveats |
 
 <p align="center">
@@ -60,6 +61,38 @@ November 2026.
   May has the highest hit rate (71%).
 
 The app recomputes all of these from the selected filters.
+
+## Vesting-date analysis
+
+Meta RSUs vest on the 15th of the trade-window month, so the practical question
+is whether to sell on the vest date, wait a few days, or hold to the end of the
+window. The **Vesting & sale timing** tab measures close-to-close returns from
+the vest-day close across 57 completed windows (2012–2026).
+
+<p align="center">
+  <img src="docs/vesting-timing.png" alt="Vesting and sale timing analysis" width="100%">
+</p>
+
+- **Early post-vest weakness:** selling 3 trading days after vest averaged
+  **−1.0%** versus the vest-day close, and beat the vest date in only **39%**
+  of windows. Days 1–5 are all negative on average.
+- **Late-month recovery:** calendar day 26 was the strongest date in-sample,
+  averaging **+1.1%** versus the vest-day close with **55%** positive
+  (38 observations). Day 27 averaged +0.6% with a 62% win rate.
+- **Bimodal peaks:** **30%** of windows peaked on the vest date itself, and
+  **54%** peaked in the final five trading days. Mid-month is usually not the
+  high.
+- **Month matters:** holding from vest to window close averaged **+1.3%** in May
+  (64% win) and **+2.3%** in November (57%), but **−1.4%** in February (43%) and
+  **−0.5%** in August (53%).
+- **Not a reliable edge overall:** holding to the window close averaged
+  **+0.4%** (median +0.6%, 54% positive), with a 95% bootstrap CI of
+  **[−1.2%, +2.2%]** that crosses zero. The 26th was chosen after looking at the
+  data, so treat it as descriptive rather than a signal.
+
+The tab recomputes every table and chart under the sidebar filters. The vest
+date is rolled forward to the next trading day when the 15th falls on a weekend
+or holiday.
 
 ## Quickstart
 
