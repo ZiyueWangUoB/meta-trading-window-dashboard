@@ -21,11 +21,15 @@ from meta_windows.charts import (
     price_window_chart,
     return_distribution_chart,
     trajectory_chart,
+    vesting_calendar_chart,
+    vesting_lag_chart,
+    vesting_peak_chart,
     volume_ratio_chart,
     window_heatmap_chart,
     window_returns_chart,
 )
 from meta_windows.data import fetch_earnings_dates, fetch_prices
+from meta_windows.vesting import vesting_analysis
 from meta_windows.windows import assign_window_days, build_windows
 
 st.set_page_config(
@@ -250,6 +254,7 @@ summary = equity_summary(curves)
 trajectories = window_trajectories(prices, selected)
 profile = day_of_window_profile(prices, selected)
 heatmap = heatmap_returns(stats)
+vesting = vesting_analysis(prices, selected)
 
 completed = stats.loc[~stats["is_partial"]] if not stats.empty else stats
 n_open_now = int(stats["is_partial"].sum()) if not stats.empty else 0
@@ -324,8 +329,15 @@ with k5:
 # Tabs
 # ---------------------------------------------------------------------------
 
-tab_price, tab_score, tab_regime, tab_inside, tab_method = st.tabs(
-    ["Price & windows", "Window scoreboard", "Open vs blackout", "Inside the window", "Methodology"]
+tab_price, tab_score, tab_regime, tab_inside, tab_vesting, tab_method = st.tabs(
+    [
+        "Price & windows",
+        "Window scoreboard",
+        "Open vs blackout",
+        "Inside the window",
+        "Vesting & sale timing",
+        "Methodology",
+    ]
 )
 
 with tab_price:
@@ -627,6 +639,215 @@ with tab_inside:
         "days before it. Baseline is 1.0×."
     )
 
+with tab_vesting:
+    st.subheader("If you vest on the 15th, when has selling paid?")
+    st.markdown(
+        '<p class="caption-note">Meta RSUs vest on the 15th of the trade-window '
+        "month, or the next trading day when the 15th falls on a weekend or "
+        "holiday. This analysis starts at the vest-day close and asks what each "
+        "later sale date would have returned. Positive = better than selling on "
+        "the vest date. Completed windows only.</p>",
+        unsafe_allow_html=True,
+    )
+
+    vest_windows = vesting["windows"]
+    if vest_windows.empty:
+        st.info(
+            "No completed windows match the current filters. Widen the year or "
+            "month selection, or wait for the current window to close."
+        )
+    else:
+        lag = vesting["lag"]
+        calendar = vesting["calendar"]
+        peaks = vesting["peaks"]
+        rules = vesting["rules"]
+        months = vesting["months"]
+
+        n_vest = len(vest_windows)
+        peak_on_vest = float((vest_windows["peak_offset"] == 0).mean())
+        peak_last5 = float(vest_windows["peak_last5"].mean())
+        hold_mean = float(vest_windows["hold_to_close"].mean())
+        hold_median = float(vest_windows["hold_to_close"].median())
+        hold_win = float((vest_windows["hold_to_close"] > 0).mean())
+        hold_rule = rules.loc[rules["rule"] == "last"].iloc[0]
+
+        v1, v2, v3, v4 = st.columns(4, gap="medium")
+        with v1:
+            kpi_card("Completed windows", f"{n_vest}", "with a vest date in scope")
+        with v2:
+            kpi_card(
+                "Peak on vest day",
+                pct(peak_on_vest),
+                "post-vest high is on the vest date",
+            )
+        with v3:
+            kpi_card(
+                "Peak in last 5 days",
+                pct(peak_last5),
+                "of the window",
+            )
+        with v4:
+            kpi_card(
+                "Hold to window close",
+                pct(hold_mean),
+                f"median {pct(hold_median)} · {pct(hold_win)} win",
+                "pos" if hold_mean > 0 else "neg",
+            )
+
+        st.markdown("**Average return by trading day after vest**")
+        st.plotly_chart(
+            vesting_lag_chart(lag),
+            width="stretch",
+            config={"displayModeBar": False, "responsive": True},
+        )
+        st.caption(
+            "Shaded band = 95% bootstrap confidence interval. Days 11–12 are "
+            "omitted because too few windows run that long. The early post-vest "
+            "dip and late-month recovery are visible, but the confidence band is "
+            "wide."
+        )
+
+        chart_left, chart_right = st.columns([1, 1], gap="large")
+        with chart_left:
+            st.markdown("**Calendar-day average, after vest**")
+            st.plotly_chart(
+                vesting_calendar_chart(calendar),
+                width="stretch",
+                config={"displayModeBar": False, "responsive": True},
+            )
+            st.caption(
+                "Average return versus the vest-day close for each date, across "
+                "windows that traded that day. Hover shows sample size and the "
+                "average price percentile within the window."
+            )
+        with chart_right:
+            st.markdown("**When does the post-vest high land?**")
+            st.plotly_chart(
+                vesting_peak_chart(peaks),
+                width="stretch",
+                config={"displayModeBar": False, "responsive": True},
+            )
+            st.caption(
+                "The vest date (the 15th, or the next trading day) and the final "
+                "week of the month account for most post-vest peaks — a bimodal "
+                "pattern rather than one clean date."
+            )
+
+        st.markdown("#### Sale-rule scoreboard")
+        is_vest_rule = rules["rule"] == "vest"
+        rules_table = pd.DataFrame(
+            {
+                "Rule": rules["label"],
+                "Windows": rules["n"],
+                "Avg vs vest": rules["mean"] * 100,
+                "Median": rules["median"] * 100,
+                "Win rate": np.where(
+                    is_vest_rule,
+                    "—",
+                    (rules["win_rate"] * 100).round(0).astype(int).astype(str) + "%",
+                ),
+                "95% CI": np.where(
+                    is_vest_rule,
+                    "—",
+                    rules.apply(
+                        lambda row: (
+                            f"[{row['ci_low'] * 100:+.1f}%, "
+                            f"{row['ci_high'] * 100:+.1f}%]"
+                        ),
+                        axis=1,
+                    ),
+                ),
+                "Beat vest": np.where(
+                    is_vest_rule,
+                    "—",
+                    (rules["beat_vest"] * 100).round(0).astype(int).astype(str) + "%",
+                ),
+            }
+        )
+        st.dataframe(
+            rules_table,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Avg vs vest": st.column_config.NumberColumn(format="%+.1f%%"),
+                "Median": st.column_config.NumberColumn(format="%+.1f%%"),
+            },
+        )
+        st.caption(
+            "Fixed sale rules; 95% CI from 5,000 bootstrap resamples. "
+            "'Beat vest' is the share of windows where the rule beat selling on "
+            "the vest date."
+        )
+
+        st.markdown("#### By window month")
+        months_table = pd.DataFrame(
+            {
+                "Month": months["month"],
+                "Windows": months["windows"],
+                "Avg close": months["last_mean"] * 100,
+                "Win close": months["last_win"] * 100,
+                "Avg ≥26th": months["dom_26_mean"] * 100,
+                "Win ≥26th": months["dom_26_win"] * 100,
+            }
+        )
+        st.dataframe(
+            months_table,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "Avg close": st.column_config.NumberColumn(format="%+.1f%%"),
+                "Win close": st.column_config.NumberColumn(format="%.0f%%"),
+                "Avg ≥26th": st.column_config.NumberColumn(format="%+.1f%%"),
+                "Win ≥26th": st.column_config.NumberColumn(format="%.0f%%"),
+            },
+        )
+
+        early = rules.loc[rules["rule"] == "plus_3"].iloc[0]
+        best_day = calendar.loc[calendar["mean"].idxmax()]
+        best_dom = int(best_day["dom"])
+        late_month_best = best_dom >= 20
+        hold_ci = (
+            f"{hold_rule['ci_low'] * 100:+.1f}% to "
+            f"{hold_rule['ci_high'] * 100:+.1f}%"
+        )
+
+        if late_month_best:
+            timing_line = (
+                f"**Late-month dates have been strongest:** day {best_dom} averaged "
+                f"{best_day['mean'] * 100:+.1f}% versus the vest-day close and was "
+                f"higher in {best_day['win_rate'] * 100:.0f}% of the "
+                f"{int(best_day['n'])} windows that traded on that date."
+            )
+        else:
+            timing_line = (
+                f"**The vest date itself has been strongest in this sample:** day "
+                f"{best_dom} averaged {best_day['mean'] * 100:+.1f}% versus the "
+                f"vest-day close, higher in {best_day['win_rate'] * 100:.0f}% of "
+                f"{int(best_day['n'])} observations."
+            )
+
+        st.markdown(
+            f"""
+- **Early post-vest weakness:** selling 3 trading days after vest averaged
+  {early['mean'] * 100:+.1f}% versus the vest-day close, and beat the vest date
+  in only {early['beat_vest'] * 100:.0f}% of windows.
+- {timing_line}
+- **Now or late:** {pct(peak_on_vest)} of windows peaked on the vest date itself,
+  and {pct(peak_last5)} peaked in the final five trading days of the window.
+- **No reliable edge overall:** holding to the window close averaged
+  {pct(hold_mean)} (median {pct(hold_median)}, {pct(hold_win)} positive). The
+  95% CI is {hold_ci}, which crosses zero.
+"""
+        )
+
+        st.caption(
+            "This is a small-sample, in-sample analysis: 57 completed windows, "
+            "overlapping events, and the strongest calendar date was picked after "
+            "looking at the same data. Confidence intervals are wide; treat the "
+            "pattern as descriptive, not a trading signal. Vesting and settlement "
+            "mechanics can also delay when shares are sellable."
+        )
+
 with tab_method:
     st.subheader("Methodology and caveats")
     st.markdown(
@@ -675,6 +896,20 @@ Source: [Meta 2024 Form 10-K](https://d18rn0p25nwr6d.cloudfront.net/CIK-00013268
   nothing between windows. **Buy & hold** holds META over the same calendar span.
 - **Blackout regime:** all trading days in the selected span that are not inside
   a selected open window.
+
+### Vesting-date analysis
+
+The vesting tab assumes RSUs vest on the **15th of the month in which the window
+closes** (Feb/May/Aug/Nov), rolled forward to the next trading day when that
+date is a weekend or holiday. For each completed window it measures
+close-to-close returns from the vest-day close to fixed later sale dates and to
+the window close. Confidence intervals come from 5,000 bootstrap resamples.
+
+The calendar-day profile only averages windows that had a trading day on that
+date, so sample sizes differ by date. The 26th is the strongest date in this
+sample, but it was chosen after inspecting the same data; treat that as
+descriptive rather than a pre-registered rule. The analysis also ignores
+settlement timing and any plan-level restrictions.
 
 ### Caveats
 
